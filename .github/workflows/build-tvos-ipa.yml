@@ -118,19 +118,31 @@ jobs:
 
       - name: Placeholder secrets (fork-safe)
         # Secrets.xcconfig is optional in Base.xcconfig via `#include?`, but the
-        # Crashlytics shell-script phase in the tvOS target passes
-        # -gsp "${SRCROOT}/SmartTubeApp/GoogleService-Info.plist" at build time,
-        # so a syntactically valid plist MUST exist there or the build phase fails.
+        # Crashlytics shell-script phase is NOT optional: it aborts the build with
+        #   error: Unable to read Google Service plist at path
+        #          .../SmartTubeApp/SmartTubeApp/GoogleService-Info.plist
+        # NOTE the doubled directory: the real file lives in SmartTubeApp/SmartTubeApp/
+        # (that is the gitignored path the phase reads), so the placeholder must be
+        # placed there, not at SmartTubeApp/. This exact path was confirmed by a real
+        # failing CI run, not inferred.
         run: |
           set -euo pipefail
           cp SmartTubeApp/Config/Secrets.xcconfig.example \
              SmartTubeApp/Config/Secrets.xcconfig
-          cp SmartTubeApp/SmartTubeApp/GoogleService-Info.plist.example \
-             SmartTubeApp/GoogleService-Info.plist
+
+          PLIST_DIR="SmartTubeApp/SmartTubeApp"
+          cp "${PLIST_DIR}/GoogleService-Info.plist.example" \
+             "${PLIST_DIR}/GoogleService-Info.plist"
+
+          if [ ! -f "${PLIST_DIR}/GoogleService-Info.plist" ]; then
+            echo "::error::placeholder plist missing at ${PLIST_DIR}/GoogleService-Info.plist"
+            exit 1
+          fi
+
           echo "--- Secrets.xcconfig ---"
           cat SmartTubeApp/Config/Secrets.xcconfig
-          echo "--- placeholder plist present ---"
-          ls -l SmartTubeApp/GoogleService-Info.plist
+          echo "--- placeholder plist ---"
+          ls -l "${PLIST_DIR}/GoogleService-Info.plist"
 
       - name: Cache Swift Package Manager
         uses: actions/cache@v4
