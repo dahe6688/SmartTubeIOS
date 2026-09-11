@@ -1,0 +1,250 @@
+name: Build unsigned tvOS IPA
+
+# Cloud macOS build of the SmartTube tvOS app -> unsigned .ipa
+# Purpose: users with only a free Apple ID cannot export a signing certificate for
+# CI, so this workflow produces an UNSIGNED .ipa that Sideloadly / Impactor signs
+# locally with the user's own Apple ID at install time.
+#
+# Run it from the Actions tab: "Run workflow".
+on:
+  workflow_dispatch:
+  push:
+    # Upstream's default branch is `master` (verified via the GitHub API);
+    # `main` is tolerated so forks renamed to main still trigger.
+    branches: [master, main]
+
+concurrency:
+  group: tvos-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ipa:
+    # GitHub-hosted macOS runner. The project requires Xcode 16+ / Swift 6.
+    # macos-26 matches the version the upstream project's own CI targets.
+    runs-on: macos-26
+    timeout-minutes: 75
+
+    env:
+      SCHEME: "Smart Tube"          # tvOS scheme (product: "Smart Tube.app")
+      APP_NAME: "Smart Tube"        # product name containing a space
+      BUNDLE_ID: "com.void.smarttube.app"
+      TVOS_DEPLOYMENT_TARGET: "17.0"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preflight - verify repository layout and inputs
+        # Fails in seconds with an explicit message instead of ~5 minutes into a
+        # compile. Every path below was verified to exist on upstream `master`
+        # at commit 6f995db (2026-09-11). If upstream reorganizes the project,
+        # this step is the first thing that will tell you.
+        run: |
+          set -euo pipefail
+          echo "Building commit: $(git rev-parse --short HEAD)  ($(git log -1 --format=%cI))"
+
+          missing=0
+          require() {
+            if [ -e "$1" ]; then
+              echo "  ok       $1"
+            else
+              echo "::error::missing required path: $1"
+              missing=1
+            fi
+          }
+
+          require "SmartTube.xcworkspace"
+          require "SmartTubeApp/SmartTubeApp.xcodeproj/project.pbxproj"
+          require "SmartTubeApp/Config/Base.xcconfig"
+          require "SmartTubeApp/Config/Secrets.xcconfig.example"
+          require "SmartTubeApp/SmartTubeApp/GoogleService-Info.plist.example"
+          require "SmartTubeIOS/Package.swift"
+          require "SmartTube.xcworkspace/xcshareddata/swiftpm/Package.resolved"
+
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Repository layout does not match what this workflow expects."
+            exit 1
+          fi
+
+          # Confirm the tvOS target still hardcodes the signing identity we override.
+          if grep -q 'PROVISIONING_PROFILE_SPECIFIER\[sdk=appletvos\*\]' \
+               SmartTubeApp/SmartTubeApp.xcodeproj/project.pbxproj; then
+            echo "  ok       tvOS signing override is still required and applied"
+          else
+            echo "::warning::tvOS provisioning-profile override not found; upstream may have"
+            echo "::warning::restructured signing. The build will still run unsigned."
+          fi
+
+          echo "Preflight passed."
+
+      - name: Select Xcode (>= 16, prefer 26.6)
+        run: |
+          set -euo pipefail
+          echo "Available Xcode installations:"
+          ls /Applications | grep -i '^Xcode' || true
+
+          CANDIDATE="/Applications/Xcode_26.6.app"
+          if [ -d "$CANDIDATE" ]; then
+            sudo xcode-select -s "$CANDIDATE"
+          else
+            # Fall back to the highest-numbered Xcode present on the image.
+            NEWEST="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)"
+            if [ -z "$NEWEST" ]; then
+              echo "::error::No Xcode found on this runner image."
+              exit 1
+            fi
+            echo "::warning::$CANDIDATE not present; falling back to $NEWEST"
+            sudo xcode-select -s "$NEWEST"
+          fi
+
+          xcodebuild -version
+          xcrun --sdk appletvos --show-sdk-version
+
+      - name: Verify tvOS SDK is available
+        run: |
+          set -euo pipefail
+          SDK_VER="$(xcrun --sdk appletvos --show-sdk-version)"
+          echo "tvOS SDK: $SDK_VER"
+          # Deployment target is 17.0; the SDK must be at least that new.
+          MAJOR="${SDK_VER%%.*}"
+          if [ "$MAJOR" -lt 17 ]; then
+            echo "::error::tvOS SDK $SDK_VER is older than the required 17.0."
+            exit 1
+          fi
+
+      - name: Resolve scheme list (diagnostic)
+        run: |
+          set -euo pipefail
+          xcodebuild -workspace SmartTube.xcworkspace -list
+
+      - name: Placeholder secrets (fork-safe)
+        # Secrets.xcconfig is optional in Base.xcconfig via `#include?`, but the
+        # Crashlytics shell-script phase in the tvOS target passes
+        # -gsp "${SRCROOT}/SmartTubeApp/GoogleService-Info.plist" at build time,
+        # so a syntactically valid plist MUST exist there or the build phase fails.
+        run: |
+          set -euo pipefail
+          cp SmartTubeApp/Config/Secrets.xcconfig.example \
+             SmartTubeApp/Config/Secrets.xcconfig
+          cp SmartTubeApp/SmartTubeApp/GoogleService-Info.plist.example \
+             SmartTubeApp/GoogleService-Info.plist
+          echo "--- Secrets.xcconfig ---"
+          cat SmartTubeApp/Config/Secrets.xcconfig
+          echo "--- placeholder plist present ---"
+          ls -l SmartTubeApp/GoogleService-Info.plist
+
+      - name: Cache Swift Package Manager
+        uses: actions/cache@v4
+        with:
+          path: |
+            SmartTubeIOS/.build
+            ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
+            ~/Library/Caches/org.swift.swiftpm
+          key: spm-${{ runner.os }}-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - name: Build tvOS app (Release, unsigned)
+        run: |
+          set -euo pipefail
+          # The tvOS target hardcodes signing in project.pbxproj:
+          #   DEVELOPMENT_TEAM[sdk=appletvos*] = 5A4JA438MW
+          #   PROVISIONING_PROFILE_SPECIFIER[sdk=appletvos*] = "Smart Tube TV"
+          # Neither exists for us, so signing is forcibly disabled on the command
+          # line (command-line settings win over target-level ones).
+          # NOTE: the SDK flag is intentionally omitted here. The target already
+          # declares SDKROOT = appletvos, and pairing an explicit SDK flag with a
+          # generic tvOS destination can produce an inconsistent destination/SDK
+          # error. -destination 'generic/platform=tvOS' alone selects the device build.
+          xcodebuild build \
+            -workspace SmartTube.xcworkspace \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=tvOS' \
+            -derivedDataPath build/DerivedData \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="-" \
+            EXPANDED_CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            CODE_SIGN_STYLE=Manual \
+            TVOS_DEPLOYMENT_TARGET="$TVOS_DEPLOYMENT_TARGET"
+
+      - name: Locate built .app
+        id: locate
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/DerivedData/Build/Products -maxdepth 3 -name "${APP_NAME}.app" -type d | head -1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::Could not locate ${APP_NAME}.app in build products."
+            find build/DerivedData/Build/Products -maxdepth 3 -name '*.app' || true
+            exit 1
+          fi
+          echo "app_path=$APP_PATH" >> "$GITHUB_OUTPUT"
+          echo "Found: $APP_PATH"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist" || true
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist" || true
+
+      - name: Package unsigned .ipa
+        id: package
+        run: |
+          set -euo pipefail
+          APP_PATH="${{ steps.locate.outputs.app_path }}"
+
+          # PlistBuddy exits non-zero AND prints nothing when a key is absent, so a
+          # bare `|| echo` fallback would not fire; default the values explicitly to
+          # avoid producing a filename like "-unsigned--3.ipa".
+          read_plist() {
+            local value
+            value="$(/usr/libexec/PlistBuddy -c "Print :$1" "$APP_PATH/Info.plist" 2>/dev/null || true)"
+            printf '%s' "${value:-$2}"
+          }
+          VER="$(read_plist CFBundleShortVersionString 0.0)"
+          BUILD_NO="$(read_plist CFBundleVersion 0)"
+          IPA_NAME="SmartTube-tvOS-unsigned-${VER}-${BUILD_NO}.ipa"
+
+          rm -rf package && mkdir -p package/Payload
+          cp -R "$APP_PATH" package/Payload/
+          # Strip any signature metadata so the downstream signer starts clean.
+          rm -rf package/Payload/*.app/_CodeSignature 2>/dev/null || true
+
+          # Sanity-check the bundle before shipping it: a truncated or partial app
+          # would otherwise only surface as a cryptic Sideloadly failure.
+          APP_BUNDLE="package/Payload/${APP_NAME}.app"
+          test -f "$APP_BUNDLE/Info.plist" \
+            || { echo "::error::packaged bundle has no Info.plist"; exit 1; }
+          test -x "$APP_BUNDLE/${APP_NAME}" \
+            || { echo "::error::packaged bundle has no executable"; exit 1; }
+          echo "Bundle integrity: OK"
+
+          # The Runner.app path uses the target name, but double-check the executable
+          # name actually matches what Info.plist declares.
+          DECLARED_EXE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP_BUNDLE/Info.plist")"
+          if [ ! -x "$APP_BUNDLE/$DECLARED_EXE" ]; then
+            echo "::error::Info.plist declares CFBundleExecutable=$DECLARED_EXE but that binary is missing"
+            exit 1
+          fi
+          echo "CFBundleExecutable=$DECLARED_EXE (present)"
+
+          ( cd package && /usr/bin/zip -qry "../$IPA_NAME" Payload )
+
+          # An .ipa is just a zip with a Payload/ dir; verify it is readable.
+          /usr/bin/unzip -tq "$IPA_NAME" || { echo "::error::ipa failed zip integrity test"; exit 1; }
+
+          ls -lh "$IPA_NAME"
+          /usr/bin/unzip -l "$IPA_NAME" | head -20
+          /usr/bin/shasum -a 256 "$IPA_NAME" | tee "$IPA_NAME.sha256"
+
+          echo "ipa_name=$IPA_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartTube-tvOS-unsigned-ipa
+          path: |
+            ${{ steps.package.outputs.ipa_name }}
+            ${{ steps.package.outputs.ipa_name }}.sha256
+          if-no-files-found: error
+          retention-days: 30
