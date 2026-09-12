@@ -66,7 +66,6 @@ struct CrashlyticsLogger: Sendable {
                 crashlytics.setCustomValue(value, forKey: key)
             }
             crashlytics.record(error: error)
-        }
         #endif
     }
 
@@ -78,7 +77,6 @@ struct CrashlyticsLogger: Sendable {
             let crashlytics = Crashlytics.crashlytics()
             crashlytics.setCustomValue(id, forKey: "active_video_id")
             crashlytics.setCustomValue(title.prefix(120).description, forKey: "active_video_title")
-        }
         #endif
     }
 
@@ -93,7 +91,6 @@ struct CrashlyticsLogger: Sendable {
             crashlytics.setCustomValue(id, forKey: "intended_video_id")
             crashlytics.setCustomValue(title.prefix(120).description, forKey: "intended_video_title")
             crashlytics.setCustomValue(ISO8601DateFormatter().string(from: Date()), forKey: "intended_video_tap_time")
-        }
         #endif
     }
 
@@ -116,7 +113,6 @@ struct CrashlyticsLogger: Sendable {
                 userInfo: [NSLocalizedDescriptionKey: "User-requested diagnostic report (ID: \(sessionReportID))"]
             )
             crashlytics.record(error: error)
-        }
         #endif
     }
 
@@ -147,7 +143,6 @@ struct CrashlyticsLogger: Sendable {
                     code: 4001,
                     userInfo: [NSLocalizedDescriptionKey: "Slow video load: \(elapsedMs)ms (\(streamType))"]
                 ))
-        }
         #endif
     }
 
@@ -168,7 +163,6 @@ struct CrashlyticsLogger: Sendable {
                     code: 1,
                     userInfo: [NSLocalizedDescriptionKey: "Playback failure — see session breadcrumbs"]
                 ))
-        }
         #endif
     }
 
@@ -202,7 +196,6 @@ struct CrashlyticsLogger: Sendable {
                         NSLocalizedDescriptionKey: "Wrong video at readyToPlay: intended=\(intendedId) active=\(activeId)"
                     ]
                 ))
-        }
         #endif
     }
 }
