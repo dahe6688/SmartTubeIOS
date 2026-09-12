@@ -24,7 +24,8 @@ struct SmartTubeTVApp: App {
 
     init() {
         // The tvOS bundle contains no GoogleService-Info.plist, so configuring Firebase
-        // here would leave Crashlytics unconfigured for the whole session regardless.
+        // here would leave Crashlytics unconfigured -- and touching Crashlytics in that
+        // state is a fatal error, which is what crashed the app at launch.
         #if !os(tvOS)
             FirebaseApp.configure()
         #endif
