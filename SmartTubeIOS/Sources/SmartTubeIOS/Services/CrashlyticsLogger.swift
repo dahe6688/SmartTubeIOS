@@ -68,6 +68,7 @@ struct CrashlyticsLogger: Sendable {
             crashlytics.record(error: error)
         }
         #endif
+    }
 
     /// Stamps the video currently being loaded onto Crashlytics' persistent custom keys.
     /// Called once per `load(video:)` so that both crashes and non-fatals show which
@@ -79,6 +80,7 @@ struct CrashlyticsLogger: Sendable {
             crashlytics.setCustomValue(title.prefix(120).description, forKey: "active_video_title")
         }
         #endif
+    }
 
     /// Stamps the video the user *intended* to play onto Crashlytics' persistent custom keys.
     /// Called from `PlayerStateStore.play(video:)` — the earliest user-intent signal —
@@ -93,6 +95,7 @@ struct CrashlyticsLogger: Sendable {
             crashlytics.setCustomValue(ISO8601DateFormatter().string(from: Date()), forKey: "intended_video_tap_time")
         }
         #endif
+    }
 
     /// Records a user-triggered diagnostic non-fatal event in Crashlytics.
     /// All breadcrumbs accumulated during the session are attached to this event,
@@ -115,6 +118,7 @@ struct CrashlyticsLogger: Sendable {
             crashlytics.record(error: error)
         }
         #endif
+    }
 
     /// Records a non-fatal Crashlytics event when time-to-first-frame exceeds 4 seconds.
     /// Surfaces in the Firebase console under domain `SmartTube.SlowLoad` (code 4001),
@@ -145,6 +149,7 @@ struct CrashlyticsLogger: Sendable {
                 ))
         }
         #endif
+    }
 
     /// Automatically records a diagnostic report when playback fails and the error is
     /// shown to the user. Uses domain `SmartTube.AutoDiagnostic` (code 1) so it appears
@@ -165,6 +170,7 @@ struct CrashlyticsLogger: Sendable {
                 ))
         }
         #endif
+    }
 
     /// Records a non-fatal Crashlytics event when the video that reached readyToPlay
     /// (`activeId`) does not match the video the user intended to play (`intendedId`).
@@ -198,4 +204,5 @@ struct CrashlyticsLogger: Sendable {
                 ))
         }
         #endif
+    }
 }
