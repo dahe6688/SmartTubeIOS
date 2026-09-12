@@ -1,4 +1,6 @@
-import FirebaseCore
+#if !os(tvOS)
+    import FirebaseCore
+#endif
 import SmartTubeIOS
 import SmartTubeIOSCore
 import SwiftUI
@@ -21,7 +23,11 @@ struct SmartTubeTVApp: App {
     @State private var cardDownloadService: VideoDownloadService
 
     init() {
-        FirebaseApp.configure()
+        // The tvOS bundle contains no GoogleService-Info.plist, so configuring Firebase
+        // here would leave Crashlytics unconfigured for the whole session regardless.
+        #if !os(tvOS)
+            FirebaseApp.configure()
+        #endif
         let settingsStore = SettingsStore()
         let poTokenProvider: (any PoTokenProvider)? = {
             if let url = settingsStore.settings.poTokenServiceURL {
